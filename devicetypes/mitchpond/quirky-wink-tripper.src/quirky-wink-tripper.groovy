@@ -1,3 +1,4 @@
+
 /**
  *  Quirky/Wink Tripper Contact Sensor
  *
@@ -21,14 +22,13 @@ metadata {
 		capability "Battery"
 		capability "Configuration"
 		capability "Sensor"
-    
-		attribute "tamper", "string"
+		capability "Tamper Alert"
     
 		command "configure"
 		command "resetTamper"
-        command "testTamper"
+		command "testTamper"
         
-		fingerprint endpointId: "01", profileId: "0104", deviceId: "0402", inClusters: "0000,0001,0003,0500,0020,0B05", outClusters: "0003,0019"
+		fingerprint endpointId: "01", profileId: "0104", deviceId: "0402", inClusters: "0000,0001,0003,0500,0020,0B05", outClusters: "0003,0019", manufacturer: "Sercomm Corp.", model: "Tripper"
 	}
 
 	// UI tile definitions
@@ -52,8 +52,8 @@ metadata {
 		}
         
 		standardTile("tamper", "device.tamper", decoration: "flat", width:2, height: 2) {
-			state "OK", label: "Tamper OK", icon: "st.security.alarm.on", backgroundColor:"#79b821"
-			state "tampered", label: "Tampered", action: "resetTamper", icon: "st.security.alarm.off", backgroundColor:"#ffa81e"
+			state "clear", label: "Clear", icon: "st.security.alarm.on", backgroundColor:"#79b821"
+			state "detected", label: "Tamper Detected", action: "resetTamper", icon: "st.security.alarm.off", backgroundColor:"#ffa81e"
 		}
         
 		main ("richcontact")
@@ -63,7 +63,7 @@ metadata {
 
 // Parse incoming device messages to generate events
 def parse(String description) {
-	//log.debug "description: $description"
+	log.debug "description: $description"
 
 	def results = []
 	if (description?.startsWith('catchall:')) {
@@ -98,7 +98,7 @@ def configure() {
 		"zcl global send-me-a-report 0x500 0x0012 0x19 0 0xFF {}", "delay 200", //get notified on tamper
 		"send 0x${device.deviceNetworkId} 1 1", "delay 1500",
 		
-		"zcl global send-me-a-report 1 0x20 0x20 3600 21600 {01}", "delay 200", //battery report request
+		"zcl global send-me-a-report 1 0x20 0x20 5 21600 {01}", "delay 200", //battery report request
 		"send 0x${device.deviceNetworkId} 1 1", "delay 1500",
 	
 		"zdo bind 0x${device.deviceNetworkId} 1 1 0x500 {${device.zigbeeId}} {}", "delay 500",
@@ -172,7 +172,7 @@ private parseIasMessage(String description) {
 
 	if (status & 0b00000100) {
     		//log.debug "Tampered"
-            results << createEvent([name: "tamper", value:"tampered"])
+            results << createEvent([name: "tamper", value:"detected"])
 	}
 	else if (~status & 0b00000100) {
 		//don't reset the status here as we want to force a manual reset
@@ -197,25 +197,21 @@ private parseIasMessage(String description) {
 
 //Converts the battery level response into a percentage to display in ST
 //and creates appropriate message for given level
-//**real-world testing with this device shows that 2.4v is about as low as it can go **/
 
-private getBatteryResult(rawValue) {
-	def minVolts = 2.4
-	def maxVolts = 3.0
+private getBatteryResult(volts) {
+	def batteryMap = [28:100, 27:100, 26:75, 25:50, 24:25, 23:20,
+                          22:10, 21:0]
+	def minVolts = 21
+	def maxVolts = 30
 	def linkText = getLinkText(device)
 	def result = [name: 'battery']
-
-	def volts = rawValue / 10
-	def descriptionText = ''
-    log.debug("${linkText} reports batery voltage at ${volts}") //added logging for voltage level to help determine actual min voltage from users
-	if (volts > 3.5) {
-		result.descriptionText = "${linkText} battery has too much power (${volts} volts)."
-	}
-	else {
-		def pct = (volts - minVolts) / (maxVolts - minVolts)
-		result.value = Math.min(100, (int) pct * 100)
-		result.descriptionText = "${linkText} battery was ${result.value}%"
-	}
+	log.debug("${linkText} reports batery voltage at ${rawValue/10}") //added logging for voltage level to help determine actual min voltage from users
+    
+    if (volts < minVolts) volts = minVolts
+    	else if (volts > maxVolts) volts = maxVolts
+    
+    result.value = batteryMap[volts]
+    result.descriptionText = "${linkText} battery was ${result.value}%"
 
 	return result
 }
@@ -234,7 +230,7 @@ private Map getContactResult(value) {
 //Resets the tamper switch state
 private resetTamper(){
 	log.debug "Tamper alarm reset."
-	sendEvent([name: "tamper", value:"OK"])
+	sendEvent([name: "tamper", value:"clear"])
 }
 
 private hex(value) {
@@ -259,5 +255,5 @@ private byte[] reverseArray(byte[] array) {
 	return array
 }
 private testTamper() {
-	sendEvent([name: "tamper", value: "tampered"])
+	sendEvent([name: "tamper", value: "detected"])
 }
